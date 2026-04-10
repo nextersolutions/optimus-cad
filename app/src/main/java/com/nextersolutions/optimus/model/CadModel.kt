@@ -1,6 +1,11 @@
 package com.nextersolutions.optimus.model
 
-import kotlin.math.*
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 // ── Point ────────────────────────────────────────────────────────────────────
 data class Vec2(val x: Float, val y: Float) {
@@ -68,6 +73,88 @@ sealed class CadEntity(open val id: Long, open val color: FloatArray) {
         val closed: Boolean = false,
         override val color: FloatArray = floatArrayOf(0.2f, 0.8f, 1f, 1f)
     ) : CadEntity(id, color)
+}
+
+// ── Edit handle: one draggable/editable vertex on a committed entity ──────────
+data class EditHandle(
+    val entityId: Long,
+    val pointIndex: Int,   // meaning depends on entity type — see entityHandles()
+    val pos: Vec2,
+    val label: String      // e.g. "Start", "P2", "Center"
+)
+
+/** Extract all editable handles from an entity. */
+fun entityHandles(e: CadEntity): List<EditHandle> = when (e) {
+    is CadEntity.Line -> listOf(
+        EditHandle(e.id, 0, e.start, "Start"),
+        EditHandle(e.id, 1, e.end,   "End")
+    )
+    is CadEntity.Arc -> listOf(
+        // index 0 = startAngle tip, 1 = endAngle tip, 2 = center
+        EditHandle(e.id, 0, Vec2(e.center.x + kotlin.math.cos(e.startAngle) * e.radius,
+            e.center.y + kotlin.math.sin(e.startAngle) * e.radius), "Start"),
+        EditHandle(e.id, 1, Vec2(e.center.x + kotlin.math.cos(e.endAngle)   * e.radius,
+            e.center.y + kotlin.math.sin(e.endAngle)   * e.radius), "End"),
+        EditHandle(e.id, 2, e.center, "Center")
+    )
+    is CadEntity.Circle -> listOf(
+        EditHandle(e.id, 0, e.center, "Center"),
+        // radius handle: point directly to the right
+        EditHandle(e.id, 1, Vec2(e.center.x + e.radius, e.center.y), "Radius")
+    )
+    is CadEntity.Ellipse -> listOf(
+        EditHandle(e.id, 0, e.center, "Center"),
+        EditHandle(e.id, 1, Vec2(
+            e.center.x + kotlin.math.cos(e.rotation) * e.rx,
+            e.center.y + kotlin.math.sin(e.rotation) * e.rx), "MajorEnd"),
+        EditHandle(e.id, 2, Vec2(
+            e.center.x - kotlin.math.sin(e.rotation) * e.ry,
+            e.center.y + kotlin.math.cos(e.rotation) * e.ry), "MinorEnd")
+    )
+    is CadEntity.Spline   -> e.points.mapIndexed   { i, p -> EditHandle(e.id, i, p, "P${i+1}") }
+    is CadEntity.Polyline -> e.points.mapIndexed   { i, p -> EditHandle(e.id, i, p, "P${i+1}") }
+}
+
+/** Apply a moved handle back onto the entity, returning the updated entity. */
+fun applyHandle(e: CadEntity, index: Int, newPos: Vec2): CadEntity = when (e) {
+    is CadEntity.Line -> when (index) {
+        0 -> e.copy(start = newPos)
+        else -> e.copy(end = newPos)
+    }
+    is CadEntity.Arc -> {
+        // Rebuild arc from the 3 defining points (start tip, end tip, centre)
+        val handles = entityHandles(e)
+        val pts = handles.map { it.pos }.toMutableList()
+        pts[index] = newPos
+        val startTip = pts[0]; val endTip = pts[1]; val centre = pts[2]
+        val newRadius = centre.distTo(startTip)
+        e.copy(center     = centre,
+            radius     = newRadius,
+            startAngle = kotlin.math.atan2(startTip.y - centre.y, startTip.x - centre.x),
+            endAngle   = kotlin.math.atan2(endTip.y   - centre.y, endTip.x   - centre.x))
+    }
+    is CadEntity.Circle -> when (index) {
+        0 -> e.copy(center = newPos)
+        else -> e.copy(radius = e.center.distTo(newPos))
+    }
+    is CadEntity.Ellipse -> {
+        when (index) {
+            0 -> e.copy(center = newPos)
+            1 -> {
+                val dx = newPos.x - e.center.x; val dy = newPos.y - e.center.y
+                val newRx  = kotlin.math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
+                val newRot = kotlin.math.atan2(dy, dx)
+                e.copy(rx = newRx, rotation = newRot)
+            }
+            else -> {
+                val dx = newPos.x - e.center.x; val dy = newPos.y - e.center.y
+                val newRy = kotlin.math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
+                e.copy(ry = newRy)
+            }
+        }
+    }
+    is CadEntity.Spline   -> e.copy(points = e.points.toMutableList().also { it[index] = newPos })
+    is CadEntity.Polyline -> e.copy(points = e.points.toMutableList().also { it[index] = newPos })
 }
 
 // ── Geometry helpers ─────────────────────────────────────────────────────────

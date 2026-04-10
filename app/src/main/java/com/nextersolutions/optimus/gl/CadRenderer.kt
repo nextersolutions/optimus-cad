@@ -4,13 +4,17 @@ import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import com.nextersolutions.optimus.CadState
+import com.nextersolutions.optimus.model.CadEntity
+import com.nextersolutions.optimus.model.Geometry
+import com.nextersolutions.optimus.model.Vec2
+import com.nextersolutions.optimus.model.entityHandles
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
-import kotlin.math.*
-import com.nextersolutions.optimus.model.*
+import kotlin.math.ceil
+import kotlin.math.floor
 
 class CadRenderer : GLSurfaceView.Renderer {
 
@@ -26,7 +30,7 @@ class CadRenderer : GLSurfaceView.Renderer {
     private val vertexShader = """
         uniform mat4 uMVP;
         attribute vec4 aPosition;
-        void main() { gl_Position = uMVP * aPosition; gl_PointSize = 8.0; }
+        void main() { gl_Position = uMVP * aPosition; gl_PointSize = 14.0; }
     """.trimIndent()
 
     private val fragmentShader = """
@@ -64,6 +68,23 @@ class CadRenderer : GLSurfaceView.Renderer {
         for (e in s.entities) drawEntity(e)
         s.previewEntity?.let { drawEntity(it) }
         for (p in s.inputPoints) drawPoints(listOf(p), floatArrayOf(1f, 1f, 0f, 1f))
+
+        // Draw handles for the selected entity
+        if (s.selectedEntityId != null) {
+            s.entities.find { it.id == s.selectedEntityId }?.let { entity ->
+                val handles = entityHandles(entity)
+                for (h in handles) {
+                    val isHovered = s.hoveredHandle?.let {
+                        it.entityId == h.entityId && it.pointIndex == h.pointIndex
+                    } == true
+                    drawPoints(
+                        listOf(h.pos),
+                        if (isHovered) floatArrayOf(1f, 1f, 0f, 1f)
+                        else           floatArrayOf(0f, 0.9f, 1f, 1f)
+                    )
+                }
+            }
+        }
     }
 
     private fun drawEntity(e: CadEntity) {

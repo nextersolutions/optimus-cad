@@ -3,14 +3,19 @@ package com.nextersolutions.optimus
 import androidx.lifecycle.ViewModel
 import com.nextersolutions.optimus.model.CadEntity
 import com.nextersolutions.optimus.model.DrawTool
+import com.nextersolutions.optimus.model.EditHandle
 import com.nextersolutions.optimus.model.Geometry
 import com.nextersolutions.optimus.model.Vec2
+import com.nextersolutions.optimus.model.applyHandle
+import com.nextersolutions.optimus.model.entityHandles
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.round
+
+private const val HIT_PX = 32f   // screen-pixel radius for handle hit-testing
 
 data class CadState(
     val entities: List<CadEntity> = emptyList(),
@@ -24,6 +29,10 @@ data class CadState(
     val showGrid: Boolean = true,
     val snapToGrid: Boolean = true,
     val gridSize: Float = 20f,
+    // ── Selection / vertex editing ────────────────────────────────────────
+    val selectedEntityId: Long? = null,
+    val hoveredHandle: EditHandle? = null,
+    val editDialogHandle: EditHandle? = null,
 )
 
 class CadViewModel : ViewModel() {
@@ -64,7 +73,7 @@ class CadViewModel : ViewModel() {
         val snapped = if (_state.value.snapToGrid) snap(world) else world
         val pts     = _state.value.inputPoints + snapped
         when (_state.value.selectedTool) {
-            DrawTool.SELECT   -> handleSelect(snapped)
+            DrawTool.SELECT   -> handleSelect(world, viewWidth, viewHeight)
             DrawTool.LINE     -> handleLine(pts)
             DrawTool.ARC      -> handleArc(pts)
             DrawTool.CIRCLE   -> handleCircle(pts)
@@ -76,6 +85,7 @@ class CadViewModel : ViewModel() {
 
     fun onDoubleTap(screenX: Float, screenY: Float, viewWidth: Int, viewHeight: Int) {
         when (_state.value.selectedTool) {
+            DrawTool.SELECT   -> onDoubleTapSelect(screenX, screenY, viewWidth, viewHeight)
             DrawTool.SPLINE   -> finishSpline()
             DrawTool.POLYLINE -> finishPolyline()
             else -> {}
@@ -106,7 +116,9 @@ class CadViewModel : ViewModel() {
     fun undo() {
         val s = _state.value
         when {
+            // Points in progress → cancel the last one first
             s.inputPoints.isNotEmpty() -> cancelLastPoint()
+            // Nothing in progress → remove the last committed entity
             s.entities.isNotEmpty() ->
                 _state.value = s.copy(entities = s.entities.dropLast(1), statusText = "Undone")
         }
@@ -203,9 +215,80 @@ class CadViewModel : ViewModel() {
         reset()
     }
 
-    private fun handleSelect(pt: Vec2) {
-        _state.value = _state.value.copy(statusText = "World: (${pt.x.toInt()}, ${pt.y.toInt()})")
+    private fun handleSelect(pt: Vec2, viewWidth: Int, viewHeight: Int) {
+        val s = _state.value
+        // Hit-test handles of the selected entity first, then any entity
+        val hitRadius = HIT_PX / s.zoom
+        val allHandles = if (s.selectedEntityId != null)
+            s.entities.filter { it.id == s.selectedEntityId }.flatMap { entityHandles(it) } +
+                    s.entities.filter { it.id != s.selectedEntityId }.flatMap { entityHandles(it) }
+        else
+            s.entities.flatMap { entityHandles(it) }
+
+        val hit = allHandles.minByOrNull { it.pos.distTo(pt) }
+            ?.takeIf { it.pos.distTo(pt) <= hitRadius }
+
+        if (hit != null) {
+            // Single tap on a handle → show coordinates in status bar, select entity
+            _state.value = s.copy(
+                selectedEntityId = hit.entityId,
+                hoveredHandle = hit,
+                statusText = "${hit.label}: (${fmtF(hit.pos.x)}, ${fmtF(hit.pos.y)})"
+            )
+        } else {
+            // Tap on empty space → hit-test entities by proximity to any handle
+            val entityHit = s.entities.minByOrNull { e ->
+                entityHandles(e).minOfOrNull { h -> h.pos.distTo(pt) } ?: Float.MAX_VALUE
+            }?.takeIf { e ->
+                entityHandles(e).any { h -> h.pos.distTo(pt) <= hitRadius * 4f }
+            }
+            _state.value = s.copy(
+                selectedEntityId = entityHit?.id,
+                hoveredHandle = null,
+                statusText = if (entityHit != null) "Entity selected — tap a vertex to see coords"
+                else "Tap an entity or vertex to select"
+            )
+        }
     }
+
+    /** Double-tap in SELECT mode → open edit dialog for nearest handle */
+    fun onDoubleTapSelect(screenX: Float, screenY: Float, viewWidth: Int, viewHeight: Int) {
+        val s   = _state.value
+        val pt  = screenToWorld(screenX, screenY, viewWidth, viewHeight)
+        val hitRadius = HIT_PX / s.zoom
+        val handles = if (s.selectedEntityId != null)
+            s.entities.filter { it.id == s.selectedEntityId }.flatMap { entityHandles(it) }
+        else s.entities.flatMap { entityHandles(it) }
+
+        val hit = handles.minByOrNull { it.pos.distTo(pt) }
+            ?.takeIf { it.pos.distTo(pt) <= hitRadius }
+        if (hit != null) {
+            _state.value = s.copy(editDialogHandle = hit, selectedEntityId = hit.entityId)
+        }
+    }
+
+    /** Called when the user confirms a coordinate edit from the dialog. */
+    fun applyHandleEdit(handle: EditHandle, newPos: Vec2) {
+        val s = _state.value
+        val updated = s.entities.map { e ->
+            if (e.id == handle.entityId) applyHandle(e, handle.pointIndex, newPos) else e
+        }
+        // Rebuild the updated handle so hoveredHandle reflects new position
+        val newHandle = handle.copy(pos = newPos)
+        _state.value = s.copy(
+            entities = updated,
+            editDialogHandle = null,
+            hoveredHandle = newHandle,
+            statusText = "${handle.label} → (${fmtF(newPos.x)}, ${fmtF(newPos.y)})"
+        )
+    }
+
+    fun dismissEditDialog() {
+        _state.value = _state.value.copy(editDialogHandle = null)
+    }
+
+    private fun fmtF(v: Float) = if (v == kotlin.math.floor(v.toDouble()).toFloat()) v.toInt().toString()
+    else "%.2f".format(v)
 
     // ── Preview ───────────────────────────────────────────────────────────────
     private fun updatePreview(cursor: Vec2) {
