@@ -105,8 +105,11 @@ class CadViewModel : ViewModel() {
 
     fun undo() {
         val s = _state.value
-        if (s.entities.isNotEmpty())
-            _state.value = s.copy(entities = s.entities.dropLast(1), statusText = "Undone")
+        when {
+            s.inputPoints.isNotEmpty() -> cancelLastPoint()
+            s.entities.isNotEmpty() ->
+                _state.value = s.copy(entities = s.entities.dropLast(1), statusText = "Undone")
+        }
     }
 
     fun clearAll() {
