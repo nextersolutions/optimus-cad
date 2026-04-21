@@ -53,13 +53,15 @@ class MainActivity : ComponentActivity() {
 
             OptimusCADTheme {
                 CadMainUI(viewModel = viewModel) {
+                    // The GL surface view fills the entire screen; Compose overlays sit on top.
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
-                        factory = { ctx ->
+                        factory  = { ctx ->
                             CadGLSurfaceView(
                                 context        = ctx,
                                 renderer       = renderer,
-                                getCurrentTool = { viewModel.state.value.selectedTool },
+                                getCurrentTool = { viewModel.state.value.selectedTool }, // live tool read
+                                getIs3DMode    = { viewModel.state.value.is3DMode },     // live mode read
                                 onTap = { x, y ->
                                     val (w, h) = renderer.getViewDimensions()
                                     viewModel.onTap(x, y, w, h)
@@ -72,11 +74,13 @@ class MainActivity : ComponentActivity() {
                                     val (w, h) = renderer.getViewDimensions()
                                     viewModel.onMove(x, y, w, h)
                                 },
-                                onPan  = { dx, dy -> viewModel.onPan(dx, dy) },
-                                onZoom = { factor, fx, fy ->
+                                onPan        = { dx, dy      -> viewModel.onPan(dx, dy) },
+                                onZoom       = { f, fx, fy   ->
                                     val (w, h) = renderer.getViewDimensions()
-                                    viewModel.onZoom(factor, fx, fy, w, h)
-                                }
+                                    viewModel.onZoom(f, fx, fy, w, h)
+                                },
+                                onOrbit      = { dYaw, dPitch -> viewModel.onOrbit(dYaw, dPitch) },
+                                onOrbitZoom  = { factor       -> viewModel.onOrbitZoom(factor) }
                             )
                         }
                     )
