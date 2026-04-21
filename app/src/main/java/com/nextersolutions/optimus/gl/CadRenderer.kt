@@ -133,13 +133,16 @@ class CadRenderer : GLSurfaceView.Renderer {
     // 2D scene — orthographic projection, flat XY grid, all 2D entities
     // ─────────────────────────────────────────────────────────────────────────
     private fun drawScene2D(s: CadState) {
-        GLES20.glUseProgram(program2D)                 // activate the 2D flat shader
-        buildMVP2D(s)                                  // compute ortho MVP
+        GLES20.glUseProgram(program2D)
+        buildMVP2D(s)
 
-        if (s.showGrid) drawGrid(s)                    // draw background grid first (behind axes)
-
-        // Disable depth testing for axes so they always win over grid lines at the same Z=0
+        // Everything in 2D is at Z=0, so depth testing causes random draw-order
+        // wins between grid, axes, entities and handles. Disable it entirely for 2D —
+        // we control draw order manually (grid → axes → entities → handles).
         GLES20.glDisable(GLES20.GL_DEPTH_TEST)
+
+        if (s.showGrid) drawGrid(s)
+
         drawLines2D(
             listOf(Vec2(-100000f, 0f), Vec2(100000f, 0f)),
             floatArrayOf(0.9f, 0.2f, 0.2f, 1f)
@@ -148,19 +151,14 @@ class CadRenderer : GLSurfaceView.Renderer {
             listOf(Vec2(0f, -100000f), Vec2(0f, 100000f)),
             floatArrayOf(0.2f, 0.9f, 0.2f, 1f)
         )  // Y green
-        GLES20.glEnable(GLES20.GL_DEPTH_TEST)         // re-enable for all subsequent geometry
 
-        // Draw all committed 2D entities
         for (e in s.entities) if (e !is CadEntity.Solid3D) draw2DEntity(e)
-
-        // Draw the in-progress preview ghost
         s.previewEntity?.let { if (it !is CadEntity.Solid3D) draw2DEntity(it) }
-
-        // Draw yellow dots at the currently placed input points
         for (p in s.inputPoints) drawPoints2D(listOf(p), floatArrayOf(1f, 1f, 0f, 1f))
-
-        // Draw vertex handles for the selected entity
         drawHandles2D(s)
+
+        // Re-enable depth testing before returning so 3D mode still works
+        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
     }
 
     // ─────────────────────────────────────────────────────────────────────────

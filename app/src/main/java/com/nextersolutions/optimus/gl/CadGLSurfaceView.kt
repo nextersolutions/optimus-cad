@@ -7,16 +7,6 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import com.nextersolutions.optimus.model.DrawTool
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Custom GLSurfaceView that routes touch gestures to the ViewModel.
-//
-// Gesture routing depends on the current tool AND view mode:
-//
-//   SELECT + 2D  → single-finger drag = pan, pinch = zoom
-//   SELECT + 3D  → single-finger drag = orbit (yaw/pitch), pinch = zoom distance
-//   Any draw tool → all touch events become taps/moves for point placement;
-//                   pan and zoom are disabled to prevent accidental canvas drift
-// ─────────────────────────────────────────────────────────────────────────────
 class CadGLSurfaceView(
     context: Context,
     private val renderer: CadRenderer,
@@ -35,55 +25,54 @@ class CadGLSurfaceView(
     private var lastTouchX = 0f
     private var lastTouchY = 0f
 
-    // Guards against onDown firing for the second tap of a double-tap sequence
-    private var suppressNextDown = false
-
     // ── Gesture detector: handles tap, double-tap, and scroll (drag) ─────────
     private val gestureDetector = GestureDetector(context,
         object : GestureDetector.SimpleOnGestureListener() {
 
-            // onDown fires immediately on finger-down — used for drawing tools so there
-            // is zero delay between the touch and the point being placed.
-            // SELECT is excluded here because it needs to wait to distinguish tap from drag.
+            // onDown fires immediately on finger-down.
+            // For drawing tools we place the point instantly (no 300ms delay).
+            // SELECT waits for onSingleTapConfirmed to avoid placing on drag-start.
             override fun onDown(e: MotionEvent): Boolean {
-                if (getCurrentTool() != DrawTool.SELECT && !suppressNextDown) {
-                    onTap(e.x, e.y)  // instant placement for all drawing tools
+                if (getCurrentTool() != DrawTool.SELECT) {
+                    onTap(e.x, e.y)
                 }
-                suppressNextDown = false  // reset the guard after each down event
-                return true              // must return true so the detector continues tracking
+                return true
             }
 
-            // onSingleTapConfirmed fires ~300ms after touch (only when no double-tap follows).
-            // Used only for SELECT so we can distinguish a tap from a drag properly.
+            // onSingleTapConfirmed fires ~300ms later, only when no double-tap follows.
+            // Used exclusively by SELECT so it can distinguish a tap from a drag.
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                 if (getCurrentTool() == DrawTool.SELECT) {
-                    onTap(e.x, e.y)  // delayed tap only needed for SELECT hit-testing
+                    onTap(e.x, e.y)
                 }
                 return true
             }
 
-            // Double-tap: finishes multi-point shapes or opens vertex edit dialog.
-            // We suppress the next onDown so the second finger-down of the double-tap
-            // doesn't accidentally place an extra point.
+            // Double-tap only matters for SPLINE and POLYLINE (finish the shape) and SELECT
+            // (open vertex edit dialog). For all other tools — LINE, ARC, CIRCLE, ELLIPSE,
+            // EXTRUDE — double-tap has no special meaning and should be ignored entirely.
+            // We do NOT suppress onDown here because for those tools two quick taps are just
+            // two normal point placements, not a "finish" gesture.
             override fun onDoubleTap(e: MotionEvent): Boolean {
-                suppressNextDown = true   // block the onDown that already fired or is about to
-                onDoubleTap(e.x, e.y)
+                val tool = getCurrentTool()
+                if (tool == DrawTool.SPLINE || tool == DrawTool.POLYLINE || tool == DrawTool.SELECT) {
+                    onDoubleTap(e.x, e.y)
+                }
+                // For all other tools: do nothing — the two onDown events already placed both points
                 return true
             }
 
-            // Scroll (one-finger drag): pan in 2D, orbit in 3D (SELECT mode only)
+            // Scroll (one-finger drag): pan in 2D, orbit in 3D — SELECT mode only
             override fun onScroll(
                 e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float
             ): Boolean {
-                if (getCurrentTool() != DrawTool.SELECT) return false // drawing tools: no drag
-                if (scaleDetector.isInProgress) return false           // ignore if pinching
+                if (getCurrentTool() != DrawTool.SELECT) return false
+                if (scaleDetector.isInProgress) return false
 
                 if (getIs3DMode()) {
-                    // 3D: convert pixel delta to orbit angles
-                    onOrbit(-dx * 0.3f, dy * 0.3f)   // dx inverted: drag right = rotate right
+                    onOrbit(-dx * 0.3f, dy * 0.3f)
                 } else {
-                    // 2D: translate pan in world space
-                    onPan(-dx, dy)                     // dy sign: screen Y down, world Y up
+                    onPan(-dx, dy)
                 }
                 return true
             }
